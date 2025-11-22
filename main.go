@@ -1,16 +1,18 @@
-// Command clipcli is a simple clipboard manager for the command line.
-// It allows saving clipboard history, listing it, and pasting from it.
 // main.go
 package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/atotto/clipboard"
@@ -18,13 +20,12 @@ import (
 
 const (
 	historyFileName = "clip_history.json"
-	maxHistory      = 200
+	logFileName     = "clipcli.log"
+	maxHistory      = 500
+	defaultPollMS   = 300 // poll interval in ms
 )
 
-// historyFilePath determines the path for the history file.
-// It respects the XDG_DATA_HOME environment variable and falls back to
-// ~/.local/share/clipcli/clip_history.json if it's not set.
-// It creates the directory if it does not exist.
+// historyFilePath returns path under XDG_DATA_HOME or fallback to ~/.local/share/clipcli/
 func historyFilePath() (string, error) {
 	xdg := os.Getenv("XDG_DATA_HOME")
 	if xdg == "" {
@@ -41,8 +42,22 @@ func historyFilePath() (string, error) {
 	return filepath.Join(dir, historyFileName), nil
 }
 
-// loadHistory reads the clipboard history from the JSON file.
-// If the history file does not exist, it returns an empty slice.
+func logFilePath() (string, error) {
+	xdg := os.Getenv("XDG_DATA_HOME")
+	if xdg == "" {
+		home := os.Getenv("HOME")
+		if home == "" {
+			return "", fmt.Errorf("no HOME or XDG_DATA_HOME set")
+		}
+		xdg = filepath.Join(home, ".local", "share")
+	}
+	dir := filepath.Join(xdg, "clipcli")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, logFileName), nil
+}
+
 func loadHistory() ([]string, error) {
 	p, err := historyFilePath()
 	if err != nil {
@@ -62,9 +77,8 @@ func loadHistory() ([]string, error) {
 	return hist, nil
 }
 
-// saveHistory writes the clipboard history to the JSON file.
-// It truncates the history to maxHistory items if it's longer.
-func saveHistory(hist []string) error {
+// atomicSaveHistory writes to temp file then renames for atomicity
+func atomicSaveHistory(hist []string) error {
 	p, err := historyFilePath()
 	if err != nil {
 		return err
@@ -72,22 +86,26 @@ func saveHistory(hist []string) error {
 	if len(hist) > maxHistory {
 		hist = hist[:maxHistory]
 	}
+	dir := filepath.Dir(p)
+	tmp := filepath.Join(dir, fmt.Sprintf(".%s.tmp", historyFileName))
 	data, err := json.MarshalIndent(hist, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0o644)
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	// rename is atomic on most Unix filesystems
+	return os.Rename(tmp, p)
 }
 
-// cmdSave reads the current clipboard content and saves it to the history.
-// It avoids saving empty content or consecutive duplicate entries.
 func cmdSave() error {
 	txt, err := clipboard.ReadAll()
 	if err != nil {
 		return fmt.Errorf("read clipboard: %w", err)
 	}
 	if strings.TrimSpace(txt) == "" {
-		return fmt.Errorf("clipboard empty or whitespace")
+		return errors.New("clipboard empty or whitespace")
 	}
 	hist, err := loadHistory()
 	if err != nil {
@@ -97,15 +115,13 @@ func cmdSave() error {
 	if len(hist) == 0 || hist[0] != txt {
 		hist = append([]string{txt}, hist...)
 	}
-	if err := saveHistory(hist); err != nil {
+	if err := atomicSaveHistory(hist); err != nil {
 		return err
 	}
 	fmt.Println("saved to history")
 	return nil
 }
 
-// cmdList displays the clipboard history with a preview of each entry.
-// Previews are truncated to 120 characters.
 func cmdList() error {
 	hist, err := loadHistory()
 	if err != nil {
@@ -117,26 +133,24 @@ func cmdList() error {
 	}
 	for i, entry := range hist {
 		preview := strings.Split(entry, "\n")[0]
-		if len(preview) > 120 {
-			preview = preview[:120] + "…"
+		if len(preview) > 200 {
+			preview = preview[:200] + "…"
 		}
 		fmt.Printf("[%d] %s\n", i, preview)
 	}
 	return nil
 }
 
-// cmdPaste copies the history item at the given index to the clipboard
-// and then simulates a paste (Ctrl+V) command using xdotool.
 func cmdPaste(idx int) error {
 	hist, err := loadHistory()
 	if err != nil {
 		return err
 	}
 	if len(hist) == 0 {
-		return fmt.Errorf("history empty")
+		return errors.New("history empty")
 	}
 	if idx < 0 || idx >= len(hist) {
-		return fmt.Errorf("index out of range")
+		return fmt.Errorf("index out of range (0..%d)", len(hist)-1)
 	}
 	text := hist[idx]
 	// write to system clipboard
@@ -145,7 +159,7 @@ func cmdPaste(idx int) error {
 	}
 	// use xdotool to simulate Ctrl+V (X11)
 	cmd := exec.Command("xdotool", "key", "--clearmodifiers", "ctrl+v")
-	// small sleep before pasting can help if invoked immediately after copying
+	// tiny sleep helps if paste is triggered right after copying
 	time.Sleep(30 * time.Millisecond)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("xdotool paste failed: %w", err)
@@ -154,28 +168,114 @@ func cmdPaste(idx int) error {
 	return nil
 }
 
-// cmdClear removes all entries from the clipboard history.
 func cmdClear() error {
-	if err := saveHistory([]string{}); err != nil {
+	if err := atomicSaveHistory([]string{}); err != nil {
 		return err
 	}
 	fmt.Println("cleared history")
 	return nil
 }
 
-// printUsage prints the command-line usage instructions.
-func printUsage() {
-	fmt.Println("Usage: clipcli <command>\nCommands:\n  save        Save current clipboard to history\n  list        List history previews\n  paste N     Paste history item N (0 = most recent)\n  clear       Clear history")
+// runDaemon polls clipboard and saves new entries
+func runDaemon(pollMS int, logger *log.Logger, stopCh <-chan struct{}) error {
+	logger.Printf("daemon starting (poll %dms)\n", pollMS)
+	ticker := time.NewTicker(time.Duration(pollMS) * time.Millisecond)
+	defer ticker.Stop()
+
+	var lastSeen string
+	for {
+		select {
+		case <-stopCh:
+			logger.Println("daemon stopping (received stop)")
+			return nil
+		case <-ticker.C:
+			txt, err := clipboard.ReadAll()
+			if err != nil {
+				// keep running, just log error
+				logger.Printf("clipboard read error: %v\n", err)
+				continue
+			}
+			// sanitize: ignore empty strings
+			if strings.TrimSpace(txt) == "" {
+				continue
+			}
+			if txt == lastSeen {
+				continue // no change
+			}
+			// update lastSeen only after successful save
+			hist, err := loadHistory()
+			if err != nil {
+				logger.Printf("load history error: %v\n", err)
+				continue
+			}
+			// skip if already the most recent (protect against races)
+			if len(hist) > 0 && hist[0] == txt {
+				lastSeen = txt
+				continue
+			}
+			// push front
+			newHist := append([]string{txt}, hist...)
+			if len(newHist) > maxHistory {
+				newHist = newHist[:maxHistory]
+			}
+			if err := atomicSaveHistory(newHist); err != nil {
+				logger.Printf("save history error: %v\n", err)
+				continue
+			}
+			lastSeen = txt
+			logger.Printf("captured clipboard (len=%d) preview: %q\n", len(newHist), preview(txt, 80))
+		}
+	}
 }
 
-// main is the entry point for the application.
-// It parses command-line arguments and executes the corresponding command.
+func preview(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
+func printUsage() {
+	fmt.Println("Usage: clipcli <command>\nCommands:\n  serve [poll_ms]   Run daemon (poll_ms optional, default 300)\n  save              Save current clipboard to history\n  list              List history previews\n  paste N           Paste history item N (0 = most recent)\n  clear             Clear history")
+}
+
 func main() {
+	// configure logging to file (if possible) else stdout
+	logPath, _ := logFilePath()
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		// fallback to stdout
+		log.SetOutput(os.Stdout)
+	} else {
+		log.SetOutput(logf)
+		defer logf.Close()
+	}
+	logger := log.Default()
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
 	}
 	switch os.Args[1] {
+	case "serve":
+		pollMS := defaultPollMS
+		if len(os.Args) >= 3 {
+			if v, err := strconv.Atoi(os.Args[2]); err == nil && v > 0 {
+				pollMS = v
+			}
+		}
+		// handle signals for graceful shutdown
+		stop := make(chan struct{})
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			sig := <-sigs
+			logger.Printf("received signal %v, shutting down\n", sig)
+			close(stop)
+		}()
+		if err := runDaemon(pollMS, logger, stop); err != nil {
+			logger.Fatalf("daemon error: %v\n", err)
+		}
 	case "save":
 		if err := cmdSave(); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
