@@ -16,6 +16,61 @@ import (
 	"github/phaneendra24/goclipboard-manager/storage"
 )
 
+// searchEntryWidget extends Entry to forward navigation shortcuts
+type searchEntryWidget struct {
+	widget.Entry
+	onUp     func()
+	onDown   func()
+	onEscape func()
+	onDelete func()
+}
+
+func (e *searchEntryWidget) TypedKey(key *fyne.KeyEvent) {
+	switch key.Name {
+	case fyne.KeyUp:
+		if e.onUp != nil {
+			e.onUp()
+		}
+		return
+	case fyne.KeyDown:
+		if e.onDown != nil {
+			e.onDown()
+		}
+		return
+	case fyne.KeyEscape:
+		if e.onEscape != nil {
+			e.onEscape()
+		}
+		return
+	case fyne.KeyDelete:
+		if e.onDelete != nil {
+			e.onDelete()
+		}
+		return
+	}
+	e.Entry.TypedKey(key)
+}
+
+func (e *searchEntryWidget) TypedShortcut(s fyne.Shortcut) {
+	if cs, ok := s.(*desktop.CustomShortcut); ok {
+		if cs.Modifier == fyne.KeyModifierControl {
+			switch cs.KeyName {
+			case fyne.KeyJ:
+				if e.onDown != nil {
+					e.onDown()
+				}
+				return
+			case fyne.KeyK:
+				if e.onUp != nil {
+					e.onUp()
+				}
+				return
+			}
+		}
+	}
+	e.Entry.TypedShortcut(s)
+}
+
 // RunGUI starts the Fyne-based graphical clipboard manager.
 func RunGUI() error {
 	// Use app ID for better window manager recognition
@@ -48,11 +103,21 @@ func RunGUI() error {
 		filtered[i] = i
 	}
 
-	// UI Components
-	searchEntry := widget.NewEntry()
+	// Custom Entry that forwards navigation shortcuts
+	var moveUp, moveDown, deleteSelected func()
+	var closeWindow func()
+
+	searchEntry := &searchEntryWidget{
+		Entry:    widget.Entry{},
+		onUp:     func() { moveUp() },
+		onDown:   func() { moveDown() },
+		onEscape: func() { closeWindow() },
+		onDelete: func() { deleteSelected() },
+	}
+	searchEntry.ExtendBaseWidget(searchEntry)
 	searchEntry.SetPlaceHolder("🔍 Search... (Enter=Copy, Ctrl+P=Pin, Esc=Quit)")
 
-	helpText := "Enter=Copy | Ctrl+Enter=Paste | Ctrl+P=Pin | Del=Delete | Esc=Quit"
+	helpText := "↑↓/Ctrl+J,K=Nav | Enter=Copy | Ctrl+Enter=Paste | Ctrl+P=Pin | Del=Delete"
 	statusLabel := widget.NewLabel(fmt.Sprintf("%s | %d items", helpText, len(sortedHist)))
 
 	// List widget
@@ -126,7 +191,6 @@ func RunGUI() error {
 	var copySelected func()
 	var copyAndClose func()
 	var pasteSelected func()
-	var deleteSelected func()
 	var togglePinSelected func()
 	var refreshHistory func()
 	var clearAll func()
@@ -253,39 +317,46 @@ func RunGUI() error {
 		}, w)
 	}
 
-	// Keyboard shortcuts
+	// Navigation helper functions - assign to variables for searchEntry callbacks
+	moveUp = func() {
+		if selectedIndex > 0 {
+			selectedIndex--
+			list.Select(selectedIndex)
+		}
+	}
+	moveDown = func() {
+		if selectedIndex < len(filtered)-1 {
+			selectedIndex++
+			list.Select(selectedIndex)
+		}
+	}
+	closeWindow = func() {
+		w.Close()
+	}
+
+	// Keyboard shortcuts (for non-modified keys)
 	w.Canvas().SetOnTypedKey(func(ev *fyne.KeyEvent) {
 		switch ev.Name {
-		case fyne.KeyEscape:
-			if searchEntry.Text != "" {
-				searchEntry.SetText("")
-				applyFilter("")
-			} else {
-				w.Close()
-			}
-		case fyne.KeyReturn, fyne.KeyEnter:
-			// Only copy and close if not currently typing in search
-			// OnSubmitted handles Enter in search box
 		case fyne.KeyUp:
-			if selectedIndex > 0 {
-				selectedIndex--
-				list.Select(selectedIndex)
-			}
+			moveUp()
 		case fyne.KeyDown:
-			if selectedIndex < len(filtered)-1 {
-				selectedIndex++
-				list.Select(selectedIndex)
-			}
+			moveDown()
+		case fyne.KeyDelete:
+			deleteSelected()
 		}
 	})
 
-	// Ctrl shortcuts - these work regardless of focus
+	// Desktop shortcuts - these work regardless of focus
 	shortcutPaste := &desktop.CustomShortcut{KeyName: fyne.KeyReturn, Modifier: fyne.KeyModifierControl}
 	shortcutPin := &desktop.CustomShortcut{KeyName: fyne.KeyP, Modifier: fyne.KeyModifierControl}
 	shortcutRefresh := &desktop.CustomShortcut{KeyName: fyne.KeyR, Modifier: fyne.KeyModifierControl}
 	shortcutDelete := &desktop.CustomShortcut{KeyName: fyne.KeyD, Modifier: fyne.KeyModifierControl}
 	shortcutBackspace := &desktop.CustomShortcut{KeyName: fyne.KeyBackspace, Modifier: fyne.KeyModifierControl}
 	shortcutClear := &desktop.CustomShortcut{KeyName: fyne.KeyL, Modifier: fyne.KeyModifierControl}
+	shortcutEscape := &desktop.CustomShortcut{KeyName: fyne.KeyEscape, Modifier: fyne.KeyModifierShift} // Shift+Esc always quits
+	// Vim-style navigation: Ctrl+J (down), Ctrl+K (up)
+	shortcutNavDown := &desktop.CustomShortcut{KeyName: fyne.KeyJ, Modifier: fyne.KeyModifierControl}
+	shortcutNavUp := &desktop.CustomShortcut{KeyName: fyne.KeyK, Modifier: fyne.KeyModifierControl}
 
 	w.Canvas().AddShortcut(shortcutPaste, func(s fyne.Shortcut) { pasteSelected() })
 	w.Canvas().AddShortcut(shortcutPin, func(s fyne.Shortcut) { togglePinSelected() })
@@ -293,6 +364,9 @@ func RunGUI() error {
 	w.Canvas().AddShortcut(shortcutDelete, func(s fyne.Shortcut) { deleteSelected() })
 	w.Canvas().AddShortcut(shortcutBackspace, func(s fyne.Shortcut) { deleteSelected() })
 	w.Canvas().AddShortcut(shortcutClear, func(s fyne.Shortcut) { clearAll() })
+	w.Canvas().AddShortcut(shortcutEscape, func(s fyne.Shortcut) { w.Close() })
+	w.Canvas().AddShortcut(shortcutNavDown, func(s fyne.Shortcut) { moveDown() })
+	w.Canvas().AddShortcut(shortcutNavUp, func(s fyne.Shortcut) { moveUp() })
 
 	// Layout
 	content := container.NewBorder(
