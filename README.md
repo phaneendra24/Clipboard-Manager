@@ -1,6 +1,6 @@
 # Clipboard Manager
 
-A lightweight clipboard history manager for Linux with Fyne GUI, designed for i3wm.
+A lightweight clipboard history manager for Linux with Fyne GUI.
 
 ## Installation
 
@@ -28,7 +28,9 @@ systemctl --user daemon-reload
 systemctl --user enable --now clipboard-manager.service
 ```
 
-### 4. Add i3 Keybinding
+### 4. Add Keybinding
+
+#### For i3wm
 
 Add to `~/.config/i3/config`:
 
@@ -39,8 +41,23 @@ bindsym $mod+v exec --no-startup-id /usr/local/bin/clipboard-manager gui
 
 Reload i3: `$mod+Shift+r`
 
+#### For GNOME
+
+```bash
+# Add custom keybinding (Super+V)
+gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/clipboard-manager/']"
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/clipboard-manager/ name 'Clipboard Manager'
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/clipboard-manager/ command '/usr/local/bin/clipboard-manager gui'
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/clipboard-manager/ binding '<Super>v'
+```
+
+Or manually: **Settings → Keyboard → Custom Shortcuts → Add**
+- Name: `Clipboard Manager`
+- Command: `/usr/local/bin/clipboard-manager gui`
+- Shortcut: `Super+V`
+
 ---
 
 ## Usage
 
-Press `$mod+v` to open. Use **↑/↓** to navigate, **Enter** to paste, **Escape** to close.
+Press your keybinding to open. Use **↑/↓** to navigate, **Enter** to paste, **Escape** to close.
