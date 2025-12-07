@@ -115,10 +115,11 @@ func RunGUI() error {
 		onDelete: func() { deleteSelected() },
 	}
 	searchEntry.ExtendBaseWidget(searchEntry)
-	searchEntry.SetPlaceHolder("🔍 Search... (Enter=Copy, Ctrl+P=Pin, Esc=Quit)")
+	searchEntry.SetPlaceHolder("  Search clipboard...")
 
-	helpText := "↑↓/Ctrl+J,K=Nav | Enter=Copy | Ctrl+Enter=Paste | Ctrl+P=Pin | Del=Delete"
-	statusLabel := widget.NewLabel(fmt.Sprintf("%s | %d items", helpText, len(sortedHist)))
+	// Clean, minimal status bar
+	statusLabel := widget.NewLabel(fmt.Sprintf("⏎ Copy  •  Ctrl+⏎ Paste  •  Ctrl+P Pin  •  Del Remove  │  %d items", len(sortedHist)))
+	statusLabel.Importance = widget.LowImportance
 
 	// List widget
 	list := widget.NewList(
@@ -160,7 +161,7 @@ func RunGUI() error {
 	refreshAll := func() {
 		sortedHist = buildSortedHistory()
 		list.Refresh()
-		statusLabel.SetText(fmt.Sprintf("%s | %d items", helpText, len(sortedHist)))
+		statusLabel.SetText(fmt.Sprintf("⏎ Copy  •  Ctrl+⏎ Paste  •  Ctrl+P Pin  •  Del Remove  │  %d items", len(sortedHist)))
 	}
 
 	// Filter function
