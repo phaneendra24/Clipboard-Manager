@@ -3,6 +3,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -164,22 +165,86 @@ func RunGUI() error {
 		statusLabel.SetText(fmt.Sprintf("⏎ Copy  •  Ctrl+⏎ Paste  •  Ctrl+P Pin  •  Del Remove  │  %d items", len(sortedHist)))
 	}
 
-	// Filter function
+	// Fuzzy match function - returns score (higher = better match), -1 = no match
+	fuzzyMatch := func(pattern, text string) int {
+		pattern = strings.ToLower(pattern)
+		text = strings.ToLower(text)
+		
+		if pattern == "" {
+			return 0
+		}
+		
+		// Check for exact substring match first (highest priority)
+		if strings.Contains(text, pattern) {
+			return 1000 + len(pattern)*10
+		}
+		
+		// Fuzzy matching: characters must appear in order
+		pIdx := 0
+		score := 0
+		lastMatchIdx := -1
+		wordStart := true
+		
+		for i := 0; i < len(text) && pIdx < len(pattern); i++ {
+			if text[i] == pattern[pIdx] {
+				pIdx++
+				// Bonus for consecutive matches
+				if lastMatchIdx == i-1 {
+					score += 15
+				} else {
+					score += 5
+				}
+				// Bonus for matching at word start
+				if wordStart {
+					score += 10
+				}
+				lastMatchIdx = i
+			}
+			// Track word boundaries
+			wordStart = text[i] == ' ' || text[i] == '/' || text[i] == '_' || text[i] == '-'
+		}
+		
+		// All pattern characters must be found
+		if pIdx < len(pattern) {
+			return -1
+		}
+		
+		return score
+	}
+
+	// Filter function with fuzzy search
 	applyFilter := func(query string) {
-		query = strings.TrimSpace(strings.ToLower(query))
+		query = strings.TrimSpace(query)
 		if query == "" {
 			filtered = make([]int, len(sortedHist))
 			for i := range sortedHist {
 				filtered[i] = i
 			}
 		} else {
-			tmp := []int{}
+			// Collect matches with scores
+			type matchResult struct {
+				index int
+				score int
+			}
+			matches := []matchResult{}
+			
 			for i, v := range sortedHist {
-				if strings.Contains(strings.ToLower(v), query) {
-					tmp = append(tmp, i)
+				score := fuzzyMatch(query, v)
+				if score >= 0 {
+					matches = append(matches, matchResult{index: i, score: score})
 				}
 			}
-			filtered = tmp
+			
+			// Sort by score (higher first)
+			sort.Slice(matches, func(a, b int) bool {
+				return matches[a].score > matches[b].score
+			})
+			
+			// Extract indices
+			filtered = make([]int, len(matches))
+			for i, m := range matches {
+				filtered[i] = m.index
+			}
 		}
 		selectedIndex = 0
 		list.Refresh()
