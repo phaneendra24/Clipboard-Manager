@@ -1,0 +1,11 @@
+[Unit]
+Description=Clipboard Manager Daemon
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/local/bin/clipboard-manager serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
