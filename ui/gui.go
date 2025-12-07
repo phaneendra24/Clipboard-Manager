@@ -9,7 +9,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 
 	clipboardPkg "github/phaneendra24/goclipboard-manager/clipboard"
@@ -18,40 +18,42 @@ import (
 
 // RunGUI starts the Fyne-based graphical clipboard manager.
 func RunGUI() error {
-	fmt.Println("Starting Clipboard Manager GUI...")
-	
 	// Use app ID for better window manager recognition
 	a := app.NewWithID("com.clipcli.manager")
-	a.Settings().SetTheme(theme.DarkTheme())
+	
+	// Apply Catppuccin theme
+	a.Settings().SetTheme(&CatppuccinTheme{})
 
-	w := a.NewWindow("Clipboard Manager")
-	w.Resize(fyne.NewSize(600, 500))
+	w := a.NewWindow("📋 Clipboard Manager")
+	w.Resize(fyne.NewSize(700, 500))
 	w.CenterOnScreen()
-	
-	// Request focus to bring window to front
-	w.RequestFocus()
-	
-	fmt.Println("Window created, loading history...")
 
-	hist, err := storage.LoadHistory()
+	// Load clipboard data (history + pinned)
+	clipData, err := storage.LoadClipboardData()
 	if err != nil {
-		fmt.Printf("Error loading history: %v\n", err)
 		return err
 	}
-	fmt.Printf("Loaded %d history items\n", len(hist))
+
+	// Build sorted list: pinned items first, then unpinned
+	buildSortedHistory := func() []string {
+		pinned := storage.GetPinnedItems(clipData)
+		unpinned := storage.GetUnpinnedItems(clipData)
+		return append(pinned, unpinned...)
+	}
 
 	// State
-	originalHist := hist
-	filtered := make([]int, len(originalHist))
-	for i := range originalHist {
+	sortedHist := buildSortedHistory()
+	filtered := make([]int, len(sortedHist))
+	for i := range sortedHist {
 		filtered[i] = i
 	}
 
 	// UI Components
 	searchEntry := widget.NewEntry()
-	searchEntry.SetPlaceHolder("Search clipboard history...")
+	searchEntry.SetPlaceHolder("🔍 Search... (Enter=Copy, Ctrl+P=Pin, Esc=Quit)")
 
-	statusLabel := widget.NewLabel(fmt.Sprintf("Showing %d of %d items", len(filtered), len(originalHist)))
+	helpText := "Enter=Copy | Ctrl+Enter=Paste | Ctrl+P=Pin | Del=Delete | Esc=Quit"
+	statusLabel := widget.NewLabel(fmt.Sprintf("%s | %d items", helpText, len(sortedHist)))
 
 	// List widget
 	list := widget.NewList(
@@ -64,167 +66,250 @@ func RunGUI() error {
 		func(i widget.ListItemID, o fyne.CanvasObject) {
 			if i < len(filtered) {
 				idx := filtered[i]
-				if idx < len(originalHist) {
-					preview := strings.Split(originalHist[idx], "\n")[0]
-					if len(preview) > 80 {
-						preview = preview[:80] + "…"
+				if idx < len(sortedHist) {
+					item := sortedHist[idx]
+					preview := strings.Split(item, "\n")[0]
+					if len(preview) > 90 {
+						preview = preview[:90] + "…"
 					}
-					o.(*widget.Label).SetText(fmt.Sprintf("[%d] %s", idx, preview))
+					// Add pin indicator
+					prefix := "  "
+					if clipData.Pinned[item] {
+						prefix = "📌"
+					}
+					o.(*widget.Label).SetText(fmt.Sprintf("%s %s", prefix, preview))
 				}
 			}
 		},
 	)
 
-	var selectedIndex int = -1
+	var selectedIndex int = 0
+	if len(filtered) > 0 {
+		list.Select(0)
+	}
 	list.OnSelected = func(id widget.ListItemID) {
 		selectedIndex = id
 	}
 
 	// Refresh helper
-	refreshList := func() {
+	refreshAll := func() {
+		sortedHist = buildSortedHistory()
 		list.Refresh()
-		statusLabel.SetText(fmt.Sprintf("Showing %d of %d items", len(filtered), len(originalHist)))
+		statusLabel.SetText(fmt.Sprintf("%s | %d items", helpText, len(sortedHist)))
 	}
 
 	// Filter function
 	applyFilter := func(query string) {
 		query = strings.TrimSpace(strings.ToLower(query))
 		if query == "" {
-			filtered = make([]int, len(originalHist))
-			for i := range originalHist {
+			filtered = make([]int, len(sortedHist))
+			for i := range sortedHist {
 				filtered[i] = i
 			}
 		} else {
 			tmp := []int{}
-			for i, v := range originalHist {
+			for i, v := range sortedHist {
 				if strings.Contains(strings.ToLower(v), query) {
 					tmp = append(tmp, i)
 				}
 			}
 			filtered = tmp
 		}
-		selectedIndex = -1
-		refreshList()
+		selectedIndex = 0
+		list.Refresh()
+		if len(filtered) > 0 {
+			list.Select(0)
+		}
 	}
+
+	// Action functions
+	var copySelected func()
+	var copyAndClose func()
+	var pasteSelected func()
+	var deleteSelected func()
+	var togglePinSelected func()
+	var refreshHistory func()
+	var clearAll func()
 
 	searchEntry.OnChanged = applyFilter
 
-	// Action buttons
-	copyBtn := widget.NewButton("Copy", func() {
+	searchEntry.OnSubmitted = func(s string) {
+		if len(filtered) > 0 {
+			selectedIndex = 0
+			list.Select(0)
+			copyAndClose()
+		}
+	}
+
+	copySelected = func() {
 		if selectedIndex >= 0 && selectedIndex < len(filtered) {
 			idx := filtered[selectedIndex]
-			if idx < len(originalHist) {
-				if err := clipboardPkg.CopyToClipboard(originalHist[idx]); err != nil {
+			if idx < len(sortedHist) {
+				if err := clipboardPkg.CopyToClipboard(sortedHist[idx]); err != nil {
 					dialog.ShowError(err, w)
 				} else {
-					statusLabel.SetText(fmt.Sprintf("Copied item %d to clipboard", idx))
+					statusLabel.SetText("✓ Copied to clipboard")
 				}
 			}
-		} else {
-			statusLabel.SetText("No item selected")
 		}
-	})
+	}
 
-	pasteBtn := widget.NewButton("Paste", func() {
+	copyAndClose = func() {
+		copySelected()
+		w.Close()
+	}
+
+	pasteSelected = func() {
 		if selectedIndex >= 0 && selectedIndex < len(filtered) {
 			idx := filtered[selectedIndex]
-			if idx < len(originalHist) {
-				if err := clipboardPkg.Paste(originalHist[idx]); err != nil {
+			if idx < len(sortedHist) {
+				if err := clipboardPkg.Paste(sortedHist[idx]); err != nil {
 					dialog.ShowError(err, w)
 				} else {
-					statusLabel.SetText(fmt.Sprintf("Pasted item %d", idx))
+					w.Close()
 				}
 			}
-		} else {
-			statusLabel.SetText("No item selected")
 		}
-	})
+	}
 
-	deleteBtn := widget.NewButton("Delete", func() {
+	togglePinSelected = func() {
 		if selectedIndex >= 0 && selectedIndex < len(filtered) {
 			idx := filtered[selectedIndex]
-			if idx < len(originalHist) {
-				// Remove from history
-				originalHist = append(originalHist[:idx], originalHist[idx+1:]...)
-
-				// Rebuild filtered
-				filtered = make([]int, len(originalHist))
-				for i := range originalHist {
-					filtered[i] = i
-				}
-
-				// Save to disk
-				if err := storage.SaveHistory(originalHist); err != nil {
+			if idx < len(sortedHist) {
+				item := sortedHist[idx]
+				isPinned, err := storage.TogglePin(item)
+				if err != nil {
 					dialog.ShowError(err, w)
 					return
 				}
-
-				selectedIndex = -1
+				// Reload data
+				clipData, _ = storage.LoadClipboardData()
+				if isPinned {
+					statusLabel.SetText("📌 Pinned")
+				} else {
+					statusLabel.SetText("📌 Unpinned")
+				}
+				refreshAll()
 				applyFilter(searchEntry.Text)
-				statusLabel.SetText(fmt.Sprintf("Deleted item %d", idx))
 			}
-		} else {
-			statusLabel.SetText("No item selected")
 		}
-	})
+	}
 
-	clearBtn := widget.NewButton("Clear All", func() {
-		dialog.ShowConfirm("Confirm Clear", "Delete all clipboard history?", func(confirm bool) {
-			if confirm {
-				originalHist = []string{}
-				filtered = []int{}
-				if err := storage.SaveHistory(originalHist); err != nil {
+	deleteSelected = func() {
+		if selectedIndex >= 0 && selectedIndex < len(filtered) {
+			idx := filtered[selectedIndex]
+			if idx < len(sortedHist) {
+				item := sortedHist[idx]
+				// Remove from history
+				newHist := []string{}
+				for _, h := range clipData.History {
+					if h != item {
+						newHist = append(newHist, h)
+					}
+				}
+				clipData.History = newHist
+				// Remove from pinned if present
+				delete(clipData.Pinned, item)
+				
+				if err := storage.SaveClipboardData(clipData); err != nil {
 					dialog.ShowError(err, w)
 					return
 				}
-				refreshList()
-				statusLabel.SetText("History cleared")
+				statusLabel.SetText("✓ Deleted")
+				refreshAll()
+				applyFilter(searchEntry.Text)
 			}
-		}, w)
-	})
+		}
+	}
 
-	refreshBtn := widget.NewButton("Refresh", func() {
-		newHist, err := storage.LoadHistory()
+	refreshHistory = func() {
+		newData, err := storage.LoadClipboardData()
 		if err != nil {
 			dialog.ShowError(err, w)
 			return
 		}
-		originalHist = newHist
-		filtered = make([]int, len(originalHist))
-		for i := range originalHist {
-			filtered[i] = i
-		}
+		clipData = newData
 		searchEntry.SetText("")
-		selectedIndex = -1
-		refreshList()
-		statusLabel.SetText(fmt.Sprintf("Refreshed: %d items", len(originalHist)))
+		selectedIndex = 0
+		refreshAll()
+		if len(filtered) > 0 {
+			list.Select(0)
+		}
+		statusLabel.SetText(fmt.Sprintf("✓ Refreshed: %d items", len(sortedHist)))
+	}
+
+	clearAll = func() {
+		dialog.ShowConfirm("Clear All", "Delete all clipboard history (including pinned)?", func(confirm bool) {
+			if confirm {
+				clipData.History = []string{}
+				clipData.Pinned = make(map[string]bool)
+				if err := storage.SaveClipboardData(clipData); err != nil {
+					dialog.ShowError(err, w)
+					return
+				}
+				refreshAll()
+				statusLabel.SetText("✓ Cleared")
+			}
+		}, w)
+	}
+
+	// Keyboard shortcuts
+	w.Canvas().SetOnTypedKey(func(ev *fyne.KeyEvent) {
+		switch ev.Name {
+		case fyne.KeyEscape:
+			if searchEntry.Text != "" {
+				searchEntry.SetText("")
+				applyFilter("")
+			} else {
+				w.Close()
+			}
+		case fyne.KeyReturn, fyne.KeyEnter:
+			// Only copy and close if not currently typing in search
+			// OnSubmitted handles Enter in search box
+		case fyne.KeyUp:
+			if selectedIndex > 0 {
+				selectedIndex--
+				list.Select(selectedIndex)
+			}
+		case fyne.KeyDown:
+			if selectedIndex < len(filtered)-1 {
+				selectedIndex++
+				list.Select(selectedIndex)
+			}
+		}
 	})
 
-	// Button toolbar
-	toolbar := container.NewHBox(
-		copyBtn,
-		pasteBtn,
-		deleteBtn,
-		widget.NewSeparator(),
-		refreshBtn,
-		clearBtn,
-	)
+	// Ctrl shortcuts - these work regardless of focus
+	shortcutPaste := &desktop.CustomShortcut{KeyName: fyne.KeyReturn, Modifier: fyne.KeyModifierControl}
+	shortcutPin := &desktop.CustomShortcut{KeyName: fyne.KeyP, Modifier: fyne.KeyModifierControl}
+	shortcutRefresh := &desktop.CustomShortcut{KeyName: fyne.KeyR, Modifier: fyne.KeyModifierControl}
+	shortcutDelete := &desktop.CustomShortcut{KeyName: fyne.KeyD, Modifier: fyne.KeyModifierControl}
+	shortcutBackspace := &desktop.CustomShortcut{KeyName: fyne.KeyBackspace, Modifier: fyne.KeyModifierControl}
+	shortcutClear := &desktop.CustomShortcut{KeyName: fyne.KeyL, Modifier: fyne.KeyModifierControl}
+
+	w.Canvas().AddShortcut(shortcutPaste, func(s fyne.Shortcut) { pasteSelected() })
+	w.Canvas().AddShortcut(shortcutPin, func(s fyne.Shortcut) { togglePinSelected() })
+	w.Canvas().AddShortcut(shortcutRefresh, func(s fyne.Shortcut) { refreshHistory() })
+	w.Canvas().AddShortcut(shortcutDelete, func(s fyne.Shortcut) { deleteSelected() })
+	w.Canvas().AddShortcut(shortcutBackspace, func(s fyne.Shortcut) { deleteSelected() })
+	w.Canvas().AddShortcut(shortcutClear, func(s fyne.Shortcut) { clearAll() })
 
 	// Layout
 	content := container.NewBorder(
-		container.NewVBox(searchEntry, toolbar), // top
-		statusLabel,                              // bottom
-		nil,                                      // left
-		nil,                                      // right
-		list,                                     // center
+		searchEntry,  // top
+		statusLabel,  // bottom
+		nil, nil,
+		list,         // center
 	)
 
 	w.SetContent(content)
-	
-	fmt.Println("Window setup complete, showing window...")
 	w.Show()
-	fmt.Println("Window should be visible now. Running event loop...")
+
+	// Auto-focus search
+	go func() {
+		w.Canvas().Focus(searchEntry)
+	}()
+
 	a.Run()
-	fmt.Println("Application closed.")
 	return nil
 }

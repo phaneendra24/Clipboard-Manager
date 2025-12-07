@@ -7,3 +7,13 @@ sudo apt install -y xclip xsel xdotool
 
 # Fyne GUI dependencies (X11/OpenGL)
 sudo apt install -y libgl1-mesa-dev xorg-dev
+
+# i3wm configuration (add to ~/.config/i3/config)
+# Makes clipboard manager a borderless floating popup:
+#
+# for_window [title="Clipboard Manager"] floating enable, border none, resize set 700 500, move position center
+#
+# Keybinding:
+# bindsym $mod+v exec --no-startup-id /path/to/Clipboard-Manager gui
+
+

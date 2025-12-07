@@ -28,39 +28,56 @@ func Run(pollMS int, logger *log.Logger, stopCh <-chan struct{}) error {
 		case <-ticker.C:
 			txt, err := clipboard.ReadAll()
 			if err != nil {
-				// keep running, just log error
 				logger.Printf("clipboard read error: %v\n", err)
 				continue
 			}
-			// sanitize: ignore empty strings
+			// Ignore empty strings
 			if strings.TrimSpace(txt) == "" {
 				continue
 			}
 			if txt == lastSeen {
 				continue // no change
 			}
-			// update lastSeen only after successful save
-			hist, err := storage.LoadHistory()
+
+			clipData, err := storage.LoadClipboardData()
 			if err != nil {
 				logger.Printf("load history error: %v\n", err)
 				continue
 			}
-			// skip if already the most recent (protect against races)
-			if len(hist) > 0 && hist[0] == txt {
+
+			// Check if already exists anywhere in history
+			existsAt := -1
+			for i, item := range clipData.History {
+				if item == txt {
+					existsAt = i
+					break
+				}
+			}
+
+			if existsAt == 0 {
+				// Already at top, no change needed
 				lastSeen = txt
 				continue
 			}
-			// push front
-			newHist := append([]string{txt}, hist...)
-			if len(newHist) > storage.MaxHistory {
-				newHist = newHist[:storage.MaxHistory]
+
+			if existsAt > 0 {
+				// Remove from old position
+				clipData.History = append(clipData.History[:existsAt], clipData.History[existsAt+1:]...)
 			}
-			if err := storage.SaveHistory(newHist); err != nil {
+
+			// Add to front
+			clipData.History = append([]string{txt}, clipData.History...)
+			if len(clipData.History) > storage.MaxHistory {
+				clipData.History = clipData.History[:storage.MaxHistory]
+			}
+
+			if err := storage.SaveClipboardData(clipData); err != nil {
 				logger.Printf("save history error: %v\n", err)
 				continue
 			}
 			lastSeen = txt
-			logger.Printf("captured clipboard (len=%d) preview: %q\n", len(newHist), storage.Preview(txt, 80))
+			logger.Printf("captured clipboard (len=%d) preview: %q\n", len(clipData.History), storage.Preview(txt, 80))
 		}
 	}
 }
+

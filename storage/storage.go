@@ -17,6 +17,12 @@ const (
 	MaxHistory = 500
 )
 
+// ClipboardData represents the complete clipboard storage with history and pinned items.
+type ClipboardData struct {
+	History []string          `json:"history"`
+	Pinned  map[string]bool   `json:"pinned"` // Map of content hash to pinned status
+}
+
 // DataDir returns the data directory for clipcli, creating it if necessary.
 func DataDir() (string, error) {
 	xdg := os.Getenv("XDG_DATA_HOME")
@@ -52,8 +58,8 @@ func LogFilePath() (string, error) {
 	return filepath.Join(dir, LogFileName), nil
 }
 
-// LoadHistory loads the clipboard history from disk.
-func LoadHistory() ([]string, error) {
+// LoadClipboardData loads the complete clipboard data (history + pinned) from disk.
+func LoadClipboardData() (*ClipboardData, error) {
 	p, err := HistoryFilePath()
 	if err != nil {
 		return nil, err
@@ -61,37 +67,116 @@ func LoadHistory() ([]string, error) {
 	data, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []string{}, nil
+			return &ClipboardData{History: []string{}, Pinned: make(map[string]bool)}, nil
 		}
 		return nil, err
 	}
+
+	// Try to parse as new format first
+	var clipData ClipboardData
+	if err := json.Unmarshal(data, &clipData); err == nil && clipData.History != nil {
+		if clipData.Pinned == nil {
+			clipData.Pinned = make(map[string]bool)
+		}
+		return &clipData, nil
+	}
+
+	// Fallback: try to parse as old format (just array of strings)
 	var hist []string
 	if err := json.Unmarshal(data, &hist); err != nil {
 		return nil, err
 	}
-	return hist, nil
+	return &ClipboardData{History: hist, Pinned: make(map[string]bool)}, nil
 }
 
-// SaveHistory writes the history to disk atomically.
-func SaveHistory(hist []string) error {
+// SaveClipboardData writes the complete clipboard data to disk atomically.
+func SaveClipboardData(clipData *ClipboardData) error {
 	p, err := HistoryFilePath()
 	if err != nil {
 		return err
 	}
-	if len(hist) > MaxHistory {
-		hist = hist[:MaxHistory]
+	if len(clipData.History) > MaxHistory {
+		clipData.History = clipData.History[:MaxHistory]
 	}
 	dir := filepath.Dir(p)
 	tmp := filepath.Join(dir, fmt.Sprintf(".%s.tmp", HistoryFileName))
-	data, err := json.MarshalIndent(hist, "", "  ")
+	data, err := json.MarshalIndent(clipData, "", "  ")
 	if err != nil {
 		return err
 	}
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	// rename is atomic on most Unix filesystems
 	return os.Rename(tmp, p)
+}
+
+// LoadHistory loads only the history (backward compatible).
+func LoadHistory() ([]string, error) {
+	clipData, err := LoadClipboardData()
+	if err != nil {
+		return nil, err
+	}
+	return clipData.History, nil
+}
+
+// SaveHistory saves only the history (backward compatible).
+func SaveHistory(hist []string) error {
+	clipData, err := LoadClipboardData()
+	if err != nil {
+		// If loading fails, create new data
+		clipData = &ClipboardData{Pinned: make(map[string]bool)}
+	}
+	clipData.History = hist
+	return SaveClipboardData(clipData)
+}
+
+// IsPinned checks if an item is pinned.
+func IsPinned(text string) bool {
+	clipData, err := LoadClipboardData()
+	if err != nil {
+		return false
+	}
+	return clipData.Pinned[text]
+}
+
+// TogglePin toggles the pinned status of an item.
+func TogglePin(text string) (bool, error) {
+	clipData, err := LoadClipboardData()
+	if err != nil {
+		return false, err
+	}
+	if clipData.Pinned == nil {
+		clipData.Pinned = make(map[string]bool)
+	}
+	newStatus := !clipData.Pinned[text]
+	if newStatus {
+		clipData.Pinned[text] = true
+	} else {
+		delete(clipData.Pinned, text)
+	}
+	return newStatus, SaveClipboardData(clipData)
+}
+
+// GetPinnedItems returns only the pinned items from history.
+func GetPinnedItems(clipData *ClipboardData) []string {
+	var pinned []string
+	for _, item := range clipData.History {
+		if clipData.Pinned[item] {
+			pinned = append(pinned, item)
+		}
+	}
+	return pinned
+}
+
+// GetUnpinnedItems returns only the unpinned items from history.
+func GetUnpinnedItems(clipData *ClipboardData) []string {
+	var unpinned []string
+	for _, item := range clipData.History {
+		if !clipData.Pinned[item] {
+			unpinned = append(unpinned, item)
+		}
+	}
+	return unpinned
 }
 
 // Preview returns a truncated preview of a string.
