@@ -20,10 +20,12 @@ import (
 // searchEntryWidget extends Entry to forward navigation shortcuts
 type searchEntryWidget struct {
 	widget.Entry
-	onUp     func()
-	onDown   func()
-	onEscape func()
-	onDelete func()
+	onUp      func()
+	onDown    func()
+	onEscape  func()
+	onDelete  func()
+	onPin     func()
+	onPaste   func()
 }
 
 func (e *searchEntryWidget) TypedKey(key *fyne.KeyEvent) {
@@ -64,6 +66,21 @@ func (e *searchEntryWidget) TypedShortcut(s fyne.Shortcut) {
 			case fyne.KeyK:
 				if e.onUp != nil {
 					e.onUp()
+				}
+				return
+			case fyne.KeyP:
+				if e.onPin != nil {
+					e.onPin()
+				}
+				return
+			case fyne.KeyD:
+				if e.onDelete != nil {
+					e.onDelete()
+				}
+				return
+			case fyne.KeyReturn:
+				if e.onPaste != nil {
+					e.onPaste()
 				}
 				return
 			}
@@ -107,6 +124,7 @@ func RunGUI() error {
 	// Custom Entry that forwards navigation shortcuts
 	var moveUp, moveDown, deleteSelected func()
 	var closeWindow func()
+	var togglePinSelected, pasteSelected func()
 
 	searchEntry := &searchEntryWidget{
 		Entry:    widget.Entry{},
@@ -114,6 +132,8 @@ func RunGUI() error {
 		onDown:   func() { moveDown() },
 		onEscape: func() { closeWindow() },
 		onDelete: func() { deleteSelected() },
+		onPin:    func() { togglePinSelected() },
+		onPaste:  func() { pasteSelected() },
 	}
 	searchEntry.ExtendBaseWidget(searchEntry)
 	searchEntry.SetPlaceHolder("  Search clipboard...")
@@ -256,8 +276,6 @@ func RunGUI() error {
 	// Action functions
 	var copySelected func()
 	var copyAndClose func()
-	var pasteSelected func()
-	var togglePinSelected func()
 	var refreshHistory func()
 	var clearAll func()
 
