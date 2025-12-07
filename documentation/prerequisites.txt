@@ -1,5 +1,9 @@
 
-Pre installation setps:
+Pre installation steps:
 
+# Clipboard tools (for xdotool paste simulation)
 sudo apt update
 sudo apt install -y xclip xsel xdotool
+
+# Fyne GUI dependencies (X11/OpenGL)
+sudo apt install -y libgl1-mesa-dev xorg-dev
