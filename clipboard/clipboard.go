@@ -4,6 +4,7 @@ package clipboard
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -12,6 +13,24 @@ import (
 
 	"github/phaneendra24/goclipboard-manager/storage"
 )
+
+// isWayland checks if running under Wayland
+func isWayland() bool {
+	return os.Getenv("WAYLAND_DISPLAY") != ""
+}
+
+// SimulatePaste simulates Ctrl+V using the appropriate tool for the display server
+func SimulatePaste() error {
+	time.Sleep(30 * time.Millisecond)
+	if isWayland() {
+		// Use wtype for Wayland
+		cmd := exec.Command("wtype", "-M", "ctrl", "v", "-m", "ctrl")
+		return cmd.Run()
+	}
+	// Use xdotool for X11
+	cmd := exec.Command("xdotool", "key", "--clearmodifiers", "ctrl+v")
+	return cmd.Run()
+}
 
 // Save reads the current clipboard and saves it to history.
 func Save() error {
@@ -33,15 +52,12 @@ func Save() error {
 	return storage.SaveHistory(hist)
 }
 
-// Paste writes text to clipboard and simulates Ctrl+V using xdotool.
+// Paste writes text to clipboard and simulates Ctrl+V.
 func Paste(text string) error {
 	if err := clipboard.WriteAll(text); err != nil {
 		return err
 	}
-	// simulate paste using xdotool (X11). Small sleep helps timing.
-	time.Sleep(30 * time.Millisecond)
-	cmd := exec.Command("xdotool", "key", "--clearmodifiers", "ctrl+v")
-	return cmd.Run()
+	return SimulatePaste()
 }
 
 // PasteByIndex pastes the history item at the given index.
@@ -61,11 +77,8 @@ func PasteByIndex(idx int) error {
 	if err := clipboard.WriteAll(text); err != nil {
 		return fmt.Errorf("write clipboard: %w", err)
 	}
-	// use xdotool to simulate Ctrl+V (X11)
-	cmd := exec.Command("xdotool", "key", "--clearmodifiers", "ctrl+v")
-	time.Sleep(30 * time.Millisecond)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("xdotool paste failed: %w", err)
+	if err := SimulatePaste(); err != nil {
+		return fmt.Errorf("paste simulation failed: %w", err)
 	}
 	return nil
 }
@@ -79,3 +92,4 @@ func CopyToClipboard(text string) error {
 func ReadClipboard() (string, error) {
 	return clipboard.ReadAll()
 }
+

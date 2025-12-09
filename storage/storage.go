@@ -13,9 +13,10 @@ const (
 	HistoryFileName = "clip_history.json"
 	// LogFileName is the name of the log file.
 	LogFileName = "clipcli.log"
-	// MaxHistory is the maximum number of history entries to keep.
-	MaxHistory = 500
 )
+
+// MaxHistory is the maximum number of history entries to keep (configurable).
+var MaxHistory = 500
 
 // ClipboardData represents the complete clipboard storage with history and pinned items.
 type ClipboardData struct {
@@ -95,8 +96,25 @@ func SaveClipboardData(clipData *ClipboardData) error {
 	if err != nil {
 		return err
 	}
+	// Preserve pinned items when trimming - only trim unpinned items
 	if len(clipData.History) > MaxHistory {
-		clipData.History = clipData.History[:MaxHistory]
+		var pinned, unpinned []string
+		for _, item := range clipData.History {
+			if clipData.Pinned[item] {
+				pinned = append(pinned, item)
+			} else {
+				unpinned = append(unpinned, item)
+			}
+		}
+		// Keep all pinned + as many unpinned as will fit
+		maxUnpinned := MaxHistory - len(pinned)
+		if maxUnpinned < 0 {
+			maxUnpinned = 0
+		}
+		if len(unpinned) > maxUnpinned {
+			unpinned = unpinned[:maxUnpinned]
+		}
+		clipData.History = append(pinned, unpinned...)
 	}
 	dir := filepath.Dir(p)
 	tmp := filepath.Join(dir, fmt.Sprintf(".%s.tmp", HistoryFileName))

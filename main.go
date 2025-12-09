@@ -11,12 +11,11 @@ import (
 	"syscall"
 
 	clipboardPkg "github/phaneendra24/goclipboard-manager/clipboard"
+	"github/phaneendra24/goclipboard-manager/config"
 	"github/phaneendra24/goclipboard-manager/daemon"
 	"github/phaneendra24/goclipboard-manager/storage"
 	"github/phaneendra24/goclipboard-manager/ui"
 )
-
-const defaultPollMS = 300 // poll interval in ms
 
 func printUsage() {
 	fmt.Println(`Usage: clipcli <command>
@@ -68,7 +67,8 @@ func main() {
 
 	switch os.Args[1] {
 	case "serve":
-		pollMS := defaultPollMS
+		cfg, _ := config.Load()
+		pollMS := cfg.PollMS
 		if len(os.Args) >= 3 {
 			if v, err := strconv.Atoi(os.Args[2]); err == nil && v > 0 {
 				pollMS = v

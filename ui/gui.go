@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -20,12 +21,13 @@ import (
 // searchEntryWidget extends Entry to forward navigation shortcuts
 type searchEntryWidget struct {
 	widget.Entry
-	onUp      func()
-	onDown    func()
-	onEscape  func()
-	onDelete  func()
-	onPin     func()
-	onPaste   func()
+	onUp       func()
+	onDown     func()
+	onEscape   func()
+	onDelete   func()
+	onPin      func()
+	onPaste    func()
+	onCopy     func()
 }
 
 func (e *searchEntryWidget) TypedKey(key *fyne.KeyEvent) {
@@ -46,8 +48,15 @@ func (e *searchEntryWidget) TypedKey(key *fyne.KeyEvent) {
 		}
 		return
 	case fyne.KeyDelete:
-		if e.onDelete != nil {
+		// Only trigger delete action if search field is empty
+		if e.Text == "" && e.onDelete != nil {
 			e.onDelete()
+			return
+		}
+		// Otherwise, let the Entry handle delete for text editing
+	case fyne.KeyReturn:
+		if e.onCopy != nil {
+			e.onCopy()
 		}
 		return
 	}
@@ -307,15 +316,26 @@ func RunGUI() error {
 		w.Close()
 	}
 
+	// Assign onCopy callback now that copyAndClose is defined
+	searchEntry.onCopy = func() { copyAndClose() }
+
 	pasteSelected = func() {
 		if selectedIndex >= 0 && selectedIndex < len(filtered) {
 			idx := filtered[selectedIndex]
 			if idx < len(sortedHist) {
-				if err := clipboardPkg.Paste(sortedHist[idx]); err != nil {
+				text := sortedHist[idx]
+				// Copy to clipboard first
+				if err := clipboardPkg.CopyToClipboard(text); err != nil {
 					dialog.ShowError(err, w)
-				} else {
-					w.Close()
+					return
 				}
+				// Close window FIRST so paste goes to the previously focused window
+				w.Close()
+				// Paste in background after window closes
+				go func() {
+					time.Sleep(100 * time.Millisecond) // Give window time to close
+					clipboardPkg.SimulatePaste()
+				}()
 			}
 		}
 	}
@@ -325,6 +345,7 @@ func RunGUI() error {
 			idx := filtered[selectedIndex]
 			if idx < len(sortedHist) {
 				item := sortedHist[idx]
+				savedIndex := selectedIndex // Preserve selection
 				isPinned, err := storage.TogglePin(item)
 				if err != nil {
 					dialog.ShowError(err, w)
@@ -339,6 +360,14 @@ func RunGUI() error {
 				}
 				refreshAll()
 				applyFilter(searchEntry.Text)
+				// Restore selection (clamp to valid range)
+				if savedIndex >= len(filtered) {
+					savedIndex = len(filtered) - 1
+				}
+				if savedIndex >= 0 {
+					selectedIndex = savedIndex
+					list.Select(savedIndex)
+				}
 			}
 		}
 	}
@@ -348,6 +377,7 @@ func RunGUI() error {
 			idx := filtered[selectedIndex]
 			if idx < len(sortedHist) {
 				item := sortedHist[idx]
+				savedIndex := selectedIndex // Preserve selection
 				// Remove from history
 				newHist := []string{}
 				for _, h := range clipData.History {
@@ -366,6 +396,14 @@ func RunGUI() error {
 				statusLabel.SetText("✓ Deleted")
 				refreshAll()
 				applyFilter(searchEntry.Text)
+				// Restore selection (clamp to valid range)
+				if savedIndex >= len(filtered) {
+					savedIndex = len(filtered) - 1
+				}
+				if savedIndex >= 0 {
+					selectedIndex = savedIndex
+					list.Select(savedIndex)
+				}
 			}
 		}
 	}
